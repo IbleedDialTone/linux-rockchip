@@ -223,7 +223,7 @@ static int lima_gem_sync_bo(struct lima_sched_task *task, struct lima_bo *bo,
 	int err = 0;
 
 	if (!write) {
-		err = reservation_object_reserve_shared(bo->tbo.resv);
+		err = reservation_object_reserve_shared(bo->tbo.resv, 1);
 		if (err)
 			return err;
 	}
