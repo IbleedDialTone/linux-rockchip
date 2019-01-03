@@ -285,20 +285,16 @@ static void cpa_flush_all(unsigned long cache)
 	on_each_cpu(__cpa_flush_all, (void *) cache, 1);
 }
 
-static bool __cpa_flush_range(unsigned long start, int numpages, int cache)
+static bool __inv_flush_all(int cache)
 {
 	BUG_ON(irqs_disabled() && !early_boot_irqs_disabled);
-
-	WARN_ON(PAGE_ALIGN(start) != start);
 
 	if (cache && !static_cpu_has(X86_FEATURE_CLFLUSH)) {
 		cpa_flush_all(cache);
 		return true;
 	}
 
-	flush_tlb_kernel_range(start, start + PAGE_SIZE * numpages);
-
-	return !cache;
+	return false;
 }
 
 static void cpa_flush_range(unsigned long start, int numpages, int cache)
@@ -306,7 +302,14 @@ static void cpa_flush_range(unsigned long start, int numpages, int cache)
 	unsigned int i, level;
 	unsigned long addr;
 
-	if (__cpa_flush_range(start, numpages, cache))
+	WARN_ON(PAGE_ALIGN(start) != start);
+
+	if (__inv_flush_all(cache))
+		return;
+
+	flush_tlb_kernel_range(start, start + PAGE_SIZE * numpages);
+
+	if (!cache)
 		return;
 
 	/*
@@ -332,7 +335,12 @@ static void cpa_flush_array(unsigned long baddr, unsigned long *start,
 {
 	unsigned int i, level;
 
-	if (__cpa_flush_range(baddr, numpages, cache))
+	if (__inv_flush_all(cache))
+		return;
+
+	flush_tlb_all();
+
+	if (!cache)
 		return;
 
 	/*
@@ -2309,9 +2317,13 @@ void __kernel_map_pages(struct page *page, int numpages, int enable)
 
 	/*
 	 * We should perform an IPI and flush all tlbs,
-	 * but that can deadlock->flush only current cpu:
+	 * but that can deadlock->flush only current cpu.
+	 * Preemption needs to be disabled around __flush_tlb_all() due to
+	 * CR3 reload in __native_flush_tlb().
 	 */
+	preempt_disable();
 	__flush_tlb_all();
+	preempt_enable();
 
 	arch_flush_lazy_mmu_mode();
 }

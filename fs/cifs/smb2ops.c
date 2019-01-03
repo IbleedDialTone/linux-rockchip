@@ -747,6 +747,7 @@ move_smb2_ea_to_cifs(char *dst, size_t dst_size,
 	int rc = 0;
 	unsigned int ea_name_len = ea_name ? strlen(ea_name) : 0;
 	char *name, *value;
+	size_t buf_size = dst_size;
 	size_t name_len, value_len, user_name_len;
 
 	while (src_size > 0) {
@@ -782,9 +783,10 @@ move_smb2_ea_to_cifs(char *dst, size_t dst_size,
 			/* 'user.' plus a terminating null */
 			user_name_len = 5 + 1 + name_len;
 
-			rc += user_name_len;
-
-			if (dst_size >= user_name_len) {
+			if (buf_size == 0) {
+				/* skip copy - calc size only */
+				rc += user_name_len;
+			} else if (dst_size >= user_name_len) {
 				dst_size -= user_name_len;
 				memcpy(dst, "user.", 5);
 				dst += 5;
@@ -792,8 +794,7 @@ move_smb2_ea_to_cifs(char *dst, size_t dst_size,
 				dst += name_len;
 				*dst = 0;
 				++dst;
-			} else if (dst_size == 0) {
-				/* skip copy - calc size only */
+				rc += user_name_len;
 			} else {
 				/* stop before overrun buffer */
 				rc = -ERANGE;
@@ -1078,6 +1079,9 @@ smb2_set_fid(struct cifsFileInfo *cfile, struct cifs_fid *fid, __u32 oplock)
 
 	cfile->fid.persistent_fid = fid->persistent_fid;
 	cfile->fid.volatile_fid = fid->volatile_fid;
+#ifdef CONFIG_CIFS_DEBUG2
+	cfile->fid.mid = fid->mid;
+#endif /* CIFS_DEBUG2 */
 	server->ops->set_oplock_level(cinode, oplock, fid->epoch,
 				      &fid->purge_cache);
 	cinode->can_cache_brlcks = CIFS_CACHE_WRITE(cinode);
@@ -1190,7 +1194,7 @@ smb2_ioctl_query_info(const unsigned int xid,
 	rc = SMB2_open_init(tcon, &rqst[0], &oplock, &oparms, path);
 	if (rc)
 		goto iqinf_exit;
-	smb2_set_next_command(ses->server, &rqst[0]);
+	smb2_set_next_command(ses->server, &rqst[0], 0);
 
 	/* Query */
 	memset(&qi_iov, 0, sizeof(qi_iov));
@@ -1204,7 +1208,7 @@ smb2_ioctl_query_info(const unsigned int xid,
 				  qi.output_buffer_length, buffer);
 	if (rc)
 		goto iqinf_exit;
-	smb2_set_next_command(ses->server, &rqst[1]);
+	smb2_set_next_command(ses->server, &rqst[1], 0);
 	smb2_set_related(&rqst[1]);
 
 	/* Close */
@@ -1757,16 +1761,23 @@ smb2_set_related(struct smb_rqst *rqst)
 char smb2_padding[7] = {0, 0, 0, 0, 0, 0, 0};
 
 void
-smb2_set_next_command(struct TCP_Server_Info *server, struct smb_rqst *rqst)
+smb2_set_next_command(struct TCP_Server_Info *server, struct smb_rqst *rqst,
+		      bool has_space_for_padding)
 {
 	struct smb2_sync_hdr *shdr;
 	unsigned long len = smb_rqst_len(server, rqst);
 
 	/* SMB headers in a compound are 8 byte aligned. */
 	if (len & 7) {
-		rqst->rq_iov[rqst->rq_nvec].iov_base = smb2_padding;
-		rqst->rq_iov[rqst->rq_nvec].iov_len = 8 - (len & 7);
-		rqst->rq_nvec++;
+		if (has_space_for_padding) {
+			len = rqst->rq_iov[rqst->rq_nvec - 1].iov_len;
+			rqst->rq_iov[rqst->rq_nvec - 1].iov_len =
+				(len + 7) & ~7;
+		} else {
+			rqst->rq_iov[rqst->rq_nvec].iov_base = smb2_padding;
+			rqst->rq_iov[rqst->rq_nvec].iov_len = 8 - (len & 7);
+			rqst->rq_nvec++;
+		}
 		len = smb_rqst_len(server, rqst);
 	}
 
@@ -1816,7 +1827,7 @@ smb2_queryfs(const unsigned int xid, struct cifs_tcon *tcon,
 	rc = SMB2_open_init(tcon, &rqst[0], &oplock, &oparms, &srch_path);
 	if (rc)
 		goto qfs_exit;
-	smb2_set_next_command(server, &rqst[0]);
+	smb2_set_next_command(server, &rqst[0], 0);
 
 	memset(&qi_iov, 0, sizeof(qi_iov));
 	rqst[1].rq_iov = qi_iov;
@@ -1829,7 +1840,7 @@ smb2_queryfs(const unsigned int xid, struct cifs_tcon *tcon,
 				  NULL);
 	if (rc)
 		goto qfs_exit;
-	smb2_set_next_command(server, &rqst[1]);
+	smb2_set_next_command(server, &rqst[1], 0);
 	smb2_set_related(&rqst[1]);
 
 	memset(&close_iov, 0, sizeof(close_iov));

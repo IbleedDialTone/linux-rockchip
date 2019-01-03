@@ -160,6 +160,7 @@ void arch_sync_dma_for_cpu(struct device *dev, phys_addr_t paddr,
 	__dma_unmap_area(phys_to_virt(paddr), size, dir);
 }
 
+#ifdef CONFIG_IOMMU_DMA
 static int __swiotlb_get_sgtable_page(struct sg_table *sgt,
 				      struct page *page, size_t size)
 {
@@ -188,6 +189,7 @@ static int __swiotlb_mmap_pfn(struct vm_area_struct *vma,
 
 	return ret;
 }
+#endif /* CONFIG_IOMMU_DMA */
 
 static int __init atomic_pool_init(void)
 {
@@ -427,9 +429,9 @@ static void *__iommu_alloc_attrs(struct device *dev, size_t size,
 						   prot,
 						   __builtin_return_address(0));
 		if (addr) {
-			memset(addr, 0, size);
 			if (!coherent)
 				__dma_flush_area(page_to_virt(page), iosize);
+			memset(addr, 0, size);
 		} else {
 			iommu_dma_unmap_page(dev, *handle, iosize, 0, attrs);
 			dma_release_from_contiguous(dev, page,
