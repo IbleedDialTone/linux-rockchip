@@ -3184,7 +3184,7 @@ i915_gem_reset_request(struct intel_engine_cs *engine,
 	 */
 
 	if (i915_request_completed(request)) {
-		GEM_TRACE("%s pardoned global=%d (fence %llx:%d), current %d\n",
+		GEM_TRACE("%s pardoned global=%d (fence %llx:%lld), current %d\n",
 			  engine->name, request->global_seqno,
 			  request->fence.context, request->fence.seqno,
 			  intel_engine_get_seqno(engine));
@@ -3308,7 +3308,7 @@ static void nop_submit_request(struct i915_request *request)
 {
 	unsigned long flags;
 
-	GEM_TRACE("%s fence %llx:%d -> -EIO\n",
+	GEM_TRACE("%s fence %llx:%lld -> -EIO\n",
 		  request->engine->name,
 		  request->fence.context, request->fence.seqno);
 	dma_fence_set_error(&request->fence, -EIO);
@@ -5297,10 +5297,19 @@ int i915_gem_init_hw(struct drm_i915_private *dev_priv)
 		I915_WRITE(MI_PREDICATE_RESULT_2, IS_HSW_GT3(dev_priv) ?
 			   LOWER_SLICE_ENABLED : LOWER_SLICE_DISABLED);
 
-	/* Apply the GT workarounds... */
+	if (HAS_PCH_NOP(dev_priv)) {
+		if (IS_IVYBRIDGE(dev_priv)) {
+			u32 temp = I915_READ(GEN7_MSG_CTL);
+			temp &= ~(WAIT_FOR_PCH_FLR_ACK | WAIT_FOR_PCH_RESET_ACK);
+			I915_WRITE(GEN7_MSG_CTL, temp);
+		} else if (INTEL_GEN(dev_priv) >= 7) {
+			u32 temp = I915_READ(HSW_NDE_RSTWRN_OPT);
+			temp &= ~RESET_PCH_HANDSHAKE_ENABLE;
+			I915_WRITE(HSW_NDE_RSTWRN_OPT, temp);
+		}
+	}
+
 	intel_gt_apply_workarounds(dev_priv);
-	/* ...and determine whether they are sticking. */
-	intel_gt_verify_workarounds(dev_priv, "init");
 
 	i915_gem_init_swizzling(dev_priv);
 
